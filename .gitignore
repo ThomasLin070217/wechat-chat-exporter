@@ -1,0 +1,18 @@
+# Keys and decrypted data
+all_keys.json
+config.json
+decrypted/
+*.entitlements
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Vendor - reference only, not included
+vendor/
+
+# Personal paths
+*.personal.*
