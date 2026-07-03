@@ -69,57 +69,80 @@ def get_table_name(wxid):
     return "Msg_" + hashlib.md5(wxid.encode()).hexdigest()
 
 
-def detect_senders(table_name):
+def detect_senders(table_name, wxid):
     """
-    Auto-detect sender_id → label mapping from message_0.db samples.
-    Returns {db_idx: {sender_id: label}} dict.
+    Auto-detect sender_id → label mapping.
+
+    IMPORTANT: sender_id is NOT consistent across databases.
+    We must sample known messages from each DB to verify mapping.
     """
     sender_map = {}
 
-    db0_path = os.path.join(DECRYPTED, "message", "message_0.db")
-    if not os.path.exists(db0_path):
-        return sender_map
+    for db_idx in [2, 1, 0]:
+        db_path = os.path.join(DECRYPTED, "message", f"message_{db_idx}.db")
+        if not os.path.exists(db_path):
+            continue
 
-    db = sqlite3.connect(db0_path)
+        db = sqlite3.connect(db_path)
+        exists = db.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,)
+        ).fetchone()[0]
+        if not exists:
+            db.close()
+            continue
+
+        counts = db.execute(f"""
+            SELECT real_sender_id, COUNT(*)
+            FROM {table_name}
+            WHERE message_content IS NOT NULL
+            GROUP BY real_sender_id
+            ORDER BY COUNT(*) DESC
+        """).fetchall()
+
+        if len(counts) < 2:
+            db.close()
+            continue
+
+        # Sample messages from each sender to identify who's who
+        sids = [c[0] for c in counts if c[0] > 0]
+        db_map = {}
+
+        for sid in sids[:3]:  # top 3 senders
+            samples = db.execute(f"""
+                SELECT message_content FROM {table_name}
+                WHERE real_sender_id=? AND message_content IS NOT NULL
+                ORDER BY create_time ASC LIMIT 5
+            """, (sid,)).fetchall()
+
+            texts = [s[0][:60] for s in samples if s[0] and isinstance(s[0], str)]
+            # Show samples for manual verification
+            log(f"    DB{db_idx} sender_id={sid}: {texts[:3]}")
+
+        db.close()
+
+    # Use message_0.db for initial auto-detection
+    # The user should verify and override if needed
+    db = sqlite3.connect(os.path.join(DECRYPTED, "message", "message_0.db"))
     exists = db.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
-        (table_name,)
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", (table_name,)
     ).fetchone()[0]
 
-    if not exists:
-        db.close()
-        return sender_map
+    if exists:
+        counts = db.execute(f"""
+            SELECT real_sender_id, COUNT(*) FROM {table_name}
+            WHERE message_content IS NOT NULL
+            GROUP BY real_sender_id ORDER BY COUNT(*) DESC
+        """).fetchall()
 
-    # Get sender_id counts
-    counts = db.execute(f"""
-        SELECT real_sender_id, COUNT(*)
-        FROM {table_name}
-        WHERE message_content IS NOT NULL
-        GROUP BY real_sender_id
-        ORDER BY COUNT(*) DESC
-    """).fetchall()
-
-    if len(counts) < 2:
-        db.close()
-        return sender_map
-
-    # Heuristic: the two largest sender_ids correspond to the two participants
-    # The one with MORE messages is usually the account owner (我)
-    sids = [c[0] for c in counts if c[0] > 0]
-    if len(sids) >= 2:
-        # Larger count = me (usually)
-        if counts[0][1] > counts[1][1]:
-            me_sid = counts[0][0]
-            other_sid = counts[1][0]
-        else:
-            me_sid = counts[1][0]
-            other_sid = counts[0][0]
-
-        sender_map[0] = {me_sid: "我", other_sid: "对方"}
-
-        # Third sender = system
-        if len(counts) >= 3:
-            sender_map[0][counts[2][0]] = "系统"
+        sids = sorted([c[0] for c in counts if c[0] > 0])
+        if len(sids) >= 2:
+            # Assume: larger count = me (account owner usually talks more in 1-on-1)
+            me = counts[0][0] if counts[0][1] > counts[1][1] else counts[1][0]
+            other = counts[1][0] if me == counts[0][0] else counts[0][0]
+            sender_map[0] = {me: "我", other: "对方"}
+            if len(sids) >= 3:
+                sender_map[0][sids[2]] = "系统"
 
     db.close()
     return sender_map
