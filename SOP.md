@@ -88,11 +88,11 @@ sudo cp -R /Applications/WeChat_original.app /Applications/WeChat.app
 | message_1.db | Middle period |
 | message_2.db | Oldest messages |
 
-### sender_id Mapping
-- **Different per database** — must map per DB by sampling known messages
-- sender_id values MAY FLIP between databases (e.g., 1=me in DB1 but 2=me in DB2)
-- Verify by reading sample messages: find messages you know YOU sent and check their sender_id
-- In message_0.db: sender_id=6 is typically the account owner, but always verify
+### sender_id Mapping (Deterministic)
+- **JOIN with Name2Id table** — `real_sender_id = Name2Id.rowid` (per-DB)
+- sender_id values FLIP because Name2Id.rowid is reassigned per DB (e.g., 1=me in DB1 but 2=me in DB2)
+- Use SQL JOIN to resolve deterministically: `SELECT ... FROM Msg_xxx JOIN Name2Id ON real_sender_id = rowid`
+- Always use JOIN. Never guess from content or counts.
 
 ## Troubleshooting
 
