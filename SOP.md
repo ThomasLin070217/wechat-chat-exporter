@@ -102,3 +102,30 @@ sudo cp -R /Applications/WeChat_original.app /Applications/WeChat.app
 | App won't open after re-sign | Use original `cp -R`, don't change entitlements |
 | Table not found | Verify wxid is correct. Check if chat is group-only |
 | sender_id labels wrong | Manually verify by reading sample messages |
+
+## Location Extraction
+
+Contact locations are stored in the `extra_buffer` protobuf field of the contact database.
+
+**Binary format:** `* <marker> <CC><N> <str_len> <city_string>`
+- `CC` = ISO country code (CN, HK, GB, US, etc.)
+- `N` = region level digit
+- `city_string` = UTF-8 city/province name
+
+**Parse with:**
+```python
+def parse_location(buf):
+    results = []
+    i = 0
+    while i < len(buf) - 4:
+        if buf[i] == 0x2a:  # '*' marker
+            cc = buf[i+2:i+4].decode('ascii', errors='replace')
+            if cc.isalpha() and cc.isupper():
+                strlen = buf[i+5]
+                if strlen > 0:
+                    city = buf[i+6:i+6+strlen].decode('utf-8', errors='replace')
+                    results.append(f"{cc}:{city}")
+                i += 6 + strlen
+        i += 1
+    return results
+```

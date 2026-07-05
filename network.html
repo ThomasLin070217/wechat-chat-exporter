@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>人脉观测站</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+:root {
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --border: #e5e5e7;
+  --text: #1d1d1f;
+  --text-secondary: #86868b;
+  --accent: #0071e3;
+  --tier-a: #0071e3;
+  --tier-b: #5e9eff;
+  --tier-c: #a0c4ff;
+  --family: #ff6b6b;
+  --friend: #ffd93d;
+  --work: #4ecdc4;
+  --school: #a78bfa;
+  --community: #fb923c;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', 'Noto Sans SC', sans-serif; background: var(--bg); color: var(--text); height: 100vh; overflow: hidden; }
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+/* Top Bar */
+#topbar { display: flex; align-items: center; gap: 12px; padding: 10px 20px; background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); z-index: 100; }
+#topbar .logo { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; color: var(--text); white-space: nowrap; }
+#topbar .stats { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+#searchWrap { flex:1; max-width: 360px; position: relative; }
+#searchWrap input { width: 100%; padding: 7px 12px 7px 30px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); font-size: 13px; outline: none; transition: 0.2s; }
+#searchWrap input:focus { border-color: var(--accent); background: #fff; box-shadow: 0 0 0 3px rgba(0,113,227,0.1); }
+#searchWrap::before { content: '🔍'; position: absolute; left: 9px; top: 7px; font-size: 12px; }
+.segmented { display: flex; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+.segmented button { padding: 6px 14px; border: none; background: var(--surface); font-size: 12px; cursor: pointer; color: var(--text); transition: 0.15s; font-weight: 500; }
+.segmented button.active { background: var(--accent); color: #fff; }
+.segmented button:not(.active):hover { background: #f0f0f5; }
+
+/* Main */
+#main { display: flex; flex: 1; overflow: hidden; }
+#canvas { flex: 1; position: relative; min-width: 0; }
+#map, #graph { position: absolute; inset: 0; transition: opacity 0.35s cubic-bezier(0.22,1,0.36,1); }
+#map.hidden, #graph.hidden { opacity: 0; pointer-events: none; }
+
+/* Inspector */
+#inspector { width: 0; background: var(--surface); border-left: 1px solid var(--border); overflow-y: auto; transition: width 0.3s cubic-bezier(0.22,1,0.36,1); }
+#inspector.open { width: 380px; }
+#inspector-content { padding: 24px; min-width: 380px; }
+#inspector h3 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+#inspector .close-btn { float: right; cursor: pointer; font-size: 18px; color: var(--text-secondary); background: none; border: none; padding: 4px 8px; border-radius: 6px; }
+#inspector .close-btn:hover { background: var(--bg); }
+.inspector-field { margin: 10px 0; font-size: 13px; }
+.inspector-field .label { color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+.chip { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; margin: 2px 3px 2px 0; background: var(--bg); }
+.chip.tier-a { background: #e8f2ff; color: var(--tier-a); }
+.chip.domain { background: #e8f5f3; color: #0d9488; }
+.chip.role { background: #fef3c7; color: #b45309; }
+.chip.loc { background: #ede9fe; color: #7c3aed; }
+
+/* Contact Rows */
+#contactList { padding: 12px 0; }
+.contact-row { padding: 10px 20px; cursor: pointer; transition: 0.12s; border-left: 3px solid transparent; display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.contact-row:hover { background: #f0f0f5; }
+.contact-row.selected { background: #e8f2ff; border-left-color: var(--accent); }
+.contact-row .tier-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.contact-row .tier-dot.A { background: var(--tier-a); }
+.contact-row .tier-dot.B { background: var(--tier-b); }
+.contact-row .tier-dot.C { background: var(--tier-c); }
+.contact-row .name { font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contact-row .score { font-size: 11px; color: var(--text-secondary); }
+.contact-row .meta { font-size: 11px; color: var(--text-secondary); display: flex; gap: 4px; flex-shrink: 0; }
+
+/* Status bar */
+#statusbar { padding: 8px 20px; background: var(--surface); border-top: 1px solid var(--border); font-size: 11px; color: var(--text-secondary); display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="topbar">
+    <span class="logo">🌐 人脉观测站</span>
+    <span class="stats" id="statLabel"></span>
+    <span style="flex:1"></span>
+    <div id="searchWrap"><input id="search" placeholder="搜索：AI 上海 投资人 同学..." oninput="filter()"></div>
+    <div class="segmented">
+      <button class="active" onclick="switchView('map')">🗺️ 地图</button>
+      <button onclick="switchView('graph')">🔗 网络</button>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="canvas">
+      <div id="map"></div>
+      <div id="graph" class="hidden"></div>
+    </div>
+    <div id="inspector"><div id="inspector-content"></div></div>
+  </div>
+
+  <div id="statusbar">
+    <span id="statusLeft"></span>
+    <span>联系人 <span id="filteredCount">0</span> / <span id="totalCount">0</span></span>
+  </div>
+
+</div>
+
+<script>
+const DATA = { nodes: [], edges: [], selectedNode: null };
+
+fetch('network_data.json').then(r => r.json()).then(net => {
+  DATA.nodes = net.nodes;
+  DATA.edges = net.edges;
+  DATA.filtered = DATA.nodes.filter(n => n.tier <= 'C');
+  document.getElementById('totalCount').textContent = DATA.nodes.length;
+  document.getElementById('statLabel').textContent =
+    `Tier A ${net.nodes.filter(n=>n.tier==='A').length} · B ${net.nodes.filter(n=>n.tier==='B').length} · C ${net.nodes.filter(n=>n.tier==='C').length}`;
+  initMap();
+  initGraph();
+  renderList(DATA.filtered);
+});
+
+// ── Map ──
+let map;
+function initMap() {
+  map = L.map('map', { zoomControl: false }).setView([31.5, 115], 5);
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 18 }).addTo(map);
+
+  const cities = {};
+  DATA.nodes.forEach(n => {
+    (n.coords||[]).forEach(c => {
+      if (!cities[c.city]) cities[c.city] = { lat: c.lat, lng: c.lng, contacts: [], tiers: {A:0,B:0,C:0} };
+      cities[c.city].contacts.push(n);
+      cities[c.city].tiers[n.tier] = (cities[c.city].tiers[n.tier]||0) + 1;
+    });
+  });
+  Object.entries(cities).forEach(([city, info]) => {
+    const aCount = info.tiers.A || 0;
+    const radius = Math.min(22, 6 + (aCount * 3) + info.contacts.length * 0.3);
+    const marker = L.circleMarker([info.lat, info.lng], {
+      radius, fillColor: '#0071e3', color: '#fff', weight: 2, fillOpacity: 0.75
+    }).addTo(map);
+    const topList = info.contacts.sort((a,b)=>b.score-a.score).slice(0,5)
+      .map(c => `<div style="font-size:12px;padding:2px 0;cursor:pointer" onclick="selectContact('${c.id}')">
+        <span style="color:#0071e3">●</span> ${c.name} <span style="color:#999">${c.score}pts</span></div>`).join('');
+    marker.bindPopup(`<b>${city}</b> · ${info.contacts.length}人 · Tier A: ${aCount}<br>${topList}`);
+    marker.on('click', () => { document.getElementById('search').value = city; filter(); });
+  });
+}
+
+// ── Graph ──
+let graphSim;
+function initGraph() {
+  const svg = d3.select('#graph').append('svg').attr('width','100%').attr('height','100%');
+  const g = svg.append('g');
+  const zoom = d3.zoom().scaleExtent([0.3, 4]).on('zoom', e => g.attr('transform', e.transform));
+  svg.call(zoom);
+
+  const renderNodes = DATA.nodes.filter(n => n.tier <= 'B');
+  const renderEdges = DATA.edges.filter(e => {
+    const s = renderNodes.find(n => n.id === e.source || n.id === e.source.id);
+    const t = renderNodes.find(n => n.id === e.target || n.id === e.target.id);
+    return s && t;
+  });
+
+  graphSim = d3.forceSimulation(renderNodes)
+    .force('link', d3.forceLink(renderEdges).distance(80).strength(0.3))
+    .force('charge', d3.forceManyBody().strength(-250))
+    .force('center', d3.forceCenter(600, 400))
+    .force('collision', d3.forceCollide(15));
+
+  const link = g.append('g').selectAll('line').data(renderEdges).join('line')
+    .attr('stroke', '#e5e5e7').attr('stroke-width', d => Math.min(d.weight, 3) * 0.5);
+
+  const node = g.append('g').selectAll('g').data(renderNodes).join('g').call(d3.drag()
+    .on('start', (e,d) => { if(!e.active) graphSim.alphaTarget(0.3).restart(); d.fx=d.x;d.fy=d.y; })
+    .on('drag', (e,d) => { d.fx=e.x;d.fy=e.y; })
+    .on('end', (e,d) => { if(!e.active) graphSim.alphaTarget(0); d.fx=null;d.fy=null; }));
+
+  node.append('circle').attr('r', d => d.tier==='A' ? 6 : 4)
+    .attr('fill', d => d.tier==='A' ? '#0071e3' : '#a0c4ff').attr('stroke','#fff').attr('stroke-width',1);
+  node.append('text').text(d => d.name).attr('font-size',9).attr('fill','#666').attr('dx',8).attr('dy',3);
+  node.on('click', (e,d) => selectContact(d.id));
+
+  graphSim.on('tick', () => {
+    link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+    node.attr('transform', d => `translate(${d.x},${d.y})`);
+  });
+
+  const resize = () => {
+    const w = document.getElementById('graph').clientWidth;
+    const h = document.getElementById('graph').clientHeight;
+    svg.attr('width', w).attr('height', h);
+    graphSim.force('center', d3.forceCenter(w/2, h/2)).alpha(0.1).restart();
+  };
+  window.addEventListener('resize', resize);
+  DATA.graphResize = resize;
+}
+
+// ── Render ──
+function renderList(nodes) {
+  const container = document.getElementById('main');
+  // Remove old list
+  const old = document.getElementById('contactListWrap');
+  if (old) old.remove();
+
+  const wrap = document.createElement('div');
+  wrap.id = 'contactListWrap';
+  wrap.style.cssText = 'width:320px;overflow-y:auto;background:var(--surface);border-left:1px solid var(--border);flex-shrink:0';
+  const list = document.createElement('div');
+  list.id = 'contactList';
+
+  const shown = nodes.slice(0, 200); // Show top 200
+  shown.forEach(n => {
+    const row = document.createElement('div');
+    row.className = 'contact-row';
+    row.innerHTML = `<span class="tier-dot ${n.tier}"></span>
+      <span class="name">${n.name}</span>
+      <span class="meta">${(n.locations||[]).slice(0,1).map(l=>'📍'+l).join('')}</span>
+      <span class="score">${n.score}</span>`;
+    row.onclick = () => selectContact(n.id);
+    list.appendChild(row);
+  });
+
+  wrap.appendChild(list);
+  container.appendChild(wrap);
+  const shownCount = Math.min(nodes.length, 200);
+  document.getElementById('filteredCount').textContent = nodes.length;
+  document.getElementById('statusLeft').textContent = shownCount < nodes.length ? `显示前 ${shownCount} 人` : `显示全部 ${nodes.length} 人`;
+}
+
+// ── Selection ──
+function selectContact(id) {
+  const n = DATA.nodes.find(x => x.id === id);
+  if (!n) return;
+  DATA.selectedNode = n;
+
+  // Highlight in list
+  document.querySelectorAll('.contact-row').forEach(r => r.classList.remove('selected'));
+  const rows = document.querySelectorAll('.contact-row');
+  rows.forEach(r => { if (r.querySelector('.name')?.textContent === n.name) r.classList.add('selected'); });
+
+  // Show inspector
+  const insp = document.getElementById('inspector');
+  insp.classList.add('open');
+  document.getElementById('inspector-content').innerHTML = `
+    <button class="close-btn" onclick="document.getElementById('inspector').classList.remove('open')">✕</button>
+    <span class="chip tier-a">Tier ${n.tier}</span> <span style="font-size:12px;color:var(--text-secondary)">${n.score}pts</span>
+    <h3>${n.name}</h3>
+    <div class="inspector-field"><div class="label">领域</div>
+      ${(n.domains||[]).map(d=>`<span class="chip domain">${d}</span>`).join('')||'—'}</div>
+    <div class="inspector-field"><div class="label">角色</div>
+      ${(n.roles||[]).map(r=>`<span class="chip role">${r}</span>`).join('')||'—'}</div>
+    <div class="inspector-field"><div class="label">位置</div>
+      ${(n.locations||[]).map(l=>`<span class="chip loc">📍${l}</span>`).join('')||'—'}</div>
+    <div class="inspector-field"><div class="label">分类</div>
+      ${(n.categories||[]).map(c=>`<span class="chip">${c}</span>`).join('')}</div>
+    <div class="inspector-field" style="display:flex;gap:16px">
+      <div><span class="label">消息</span> ${n.msgs}条</div>
+      <div><span class="label">共同群</span> ${n.group_count}个</div>
+    </div>
+    ${n.note ? `<div class="inspector-field"><div class="label">备注</div>${n.note}</div>` : ''}
+  `;
+}
+
+// ── Filter ──
+function filter() {
+  const q = document.getElementById('search').value.toLowerCase();
+  let filtered;
+  if (!q) {
+    filtered = DATA.nodes.filter(n => n.tier <= 'C');
+  } else {
+    const terms = q.split(/\s+/);
+    filtered = DATA.nodes.filter(n => {
+      const txt = [n.name, ...(n.domains||[]), ...(n.roles||[]), ...(n.locations||[]), n.note||'', n.tier, ...(n.categories||[])].join(' ').toLowerCase();
+      return terms.every(t => txt.includes(t));
+    });
+  }
+  DATA.filtered = filtered;
+  renderList(filtered);
+}
+
+// ── View Switch ──
+function switchView(v) {
+  document.querySelectorAll('.segmented button').forEach((b,i) => b.classList.toggle('active', (i===0 && v==='map') || (i===1 && v==='graph')));
+  document.getElementById('map').classList.toggle('hidden', v !== 'map');
+  document.getElementById('graph').classList.toggle('hidden', v !== 'graph');
+  if (v === 'map') setTimeout(() => map?.invalidateSize(), 400);
+  if (v === 'graph') { setTimeout(() => DATA.graphResize?.(), 400); graphSim?.alpha(0.3).restart(); }
+}
+</script>
+</body>
+</html>
